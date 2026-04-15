@@ -1,0 +1,28 @@
+{
+  "name": "webhook-tester",
+  "version": "1.0.0",
+  "description": "App to receive and visualize webhooks in real-time via browser — like webhook.site but self-hosted",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest --forceExit --testTimeout=15000"
+  },
+  "keywords": ["webhook", "tester", "debug", "realtime", "sse"],
+  "author": "Quesillo27",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "better-sqlite3": "^9.4.3",
+    "nanoid": "^3.3.7"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^6.3.4",
+    "nodemon": "^3.0.2"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": ["**/tests/**/*.test.js"]
+  }
+}
