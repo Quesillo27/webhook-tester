@@ -1,15 +1,13 @@
 'use strict';
 
 const Database = require('better-sqlite3');
-const path = require('path');
-
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'webhooks.db');
+const config = require('./config');
 
 let db;
 
 function getDb() {
   if (!db) {
-    db = new Database(DB_PATH);
+    db = new Database(config.dbPath);
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     initSchema();
@@ -41,6 +39,7 @@ function initSchema() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_requests_endpoint ON requests(endpoint_id, received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_requests_endpoint_method ON requests(endpoint_id, method, received_at DESC);
   `);
 }
 
@@ -109,12 +108,49 @@ function getRequest(id) {
   return parseRequest(row);
 }
 
-function listRequests(endpointId, limit = 50) {
+function buildRequestWhere(endpointId, filters = {}) {
+  const clauses = ['endpoint_id = ?'];
+  const params = [endpointId];
+
+  if (filters.method) {
+    clauses.push('method = ?');
+    params.push(filters.method);
+  }
+
+  if (filters.search) {
+    const like = `%${filters.search}%`;
+    clauses.push("(path LIKE ? OR COALESCE(body, '') LIKE ?)");
+    params.push(like, like);
+  }
+
+  return {
+    where: clauses.join(' AND '),
+    params,
+  };
+}
+
+function listRequests(endpointId, filters = {}) {
   const database = getDb();
+  const { where, params } = buildRequestWhere(endpointId, filters);
   const rows = database.prepare(
-    'SELECT * FROM requests WHERE endpoint_id = ? ORDER BY received_at DESC LIMIT ?'
-  ).all(endpointId, limit);
+    `SELECT * FROM requests WHERE ${where} ORDER BY received_at DESC, id DESC LIMIT ? OFFSET ?`
+  ).all(...params, filters.limit, filters.offset);
   return rows.map(parseRequest);
+}
+
+function countRequests(endpointId, filters = {}) {
+  const database = getDb();
+  const { where, params } = buildRequestWhere(endpointId, filters);
+  const result = database.prepare(`SELECT COUNT(*) AS count FROM requests WHERE ${where}`).get(...params);
+  return result.count;
+}
+
+function getRequestForEndpoint(endpointId, requestId) {
+  const database = getDb();
+  const row = database.prepare(
+    'SELECT * FROM requests WHERE endpoint_id = ? AND id = ?'
+  ).get(endpointId, requestId);
+  return row ? parseRequest(row) : null;
 }
 
 function deleteRequests(endpointId) {
@@ -132,6 +168,16 @@ function parseRequest(row) {
   };
 }
 
+function getStats() {
+  const database = getDb();
+  const endpoints = database.prepare('SELECT COUNT(*) AS count FROM endpoints').get().count;
+  const requests = database.prepare('SELECT COUNT(*) AS count FROM requests').get().count;
+  return {
+    endpoints,
+    requests,
+  };
+}
+
 // Close DB (for tests)
 function closeDb() {
   if (db) {
@@ -142,6 +188,7 @@ function closeDb() {
 
 module.exports = {
   createEndpoint, getEndpoint, listEndpoints, deleteEndpoint,
-  saveRequest, getRequest, listRequests, deleteRequests,
+  saveRequest, getRequest, getRequestForEndpoint, listRequests, countRequests, deleteRequests,
+  getStats,
   closeDb,
 };

@@ -62,6 +62,9 @@
     .url-box { flex: 1; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: .5rem .85rem; font-family: monospace; font-size: .85rem; color: var(--text); cursor: pointer; user-select: all; }
     .url-box:hover { border-color: var(--accent); }
     .copy-hint { font-size: .72rem; color: var(--text-dim); }
+    .toolbar { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; padding: .75rem 1.25rem; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .toolbar-input, .toolbar-select { background: var(--surface2); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: .45rem .65rem; font-size: .82rem; }
+    .toolbar-input { min-width: 220px; flex: 1; }
 
     .request-list { flex: 1; overflow-y: auto; }
     .no-requests { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; color: var(--text-dim); font-size: .9rem; gap: .5rem; }
@@ -166,6 +169,7 @@ let eventSource = null;
 let activeRequestId = null;
 let endpoints = {};
 let requests = {};
+let requestFilters = { method: '', search: '', limit: 50, offset: 0, hasMore: false };
 
 // ── Utility ──────────────────────────────────────────────────────────────────
 
@@ -194,7 +198,20 @@ async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(BASE + path, opts);
-  return res.json();
+  const data = await res.json();
+  if (!res.ok || data.success === false) {
+    throw new Error(data.message || data.error || 'Request failed');
+  }
+  return data;
+}
+
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeAttr(str) {
+  return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // ── Endpoint management ──────────────────────────────────────────────────────
@@ -217,7 +234,7 @@ function renderEndpointList() {
     const ep = endpoints[id];
     return `<div class="endpoint-item ${id === activeEndpointId ? 'active' : ''}" onclick="selectEndpoint('${id}')">
       <div class="endpoint-id">/hooks/${id}</div>
-      <div class="endpoint-label">${ep.label || id}</div>
+      <div class="endpoint-label">${escapeHtml(ep.label || id)}</div>
       <div class="endpoint-count">${ep.request_count} request${ep.request_count !== 1 ? 's' : ''}</div>
     </div>`;
   }).join('');
@@ -236,6 +253,7 @@ async function selectEndpoint(id) {
   activeEndpointId = id;
   activeRequestId = null;
   requests = {};
+  requestFilters = { method: '', search: '', limit: 50, offset: 0, hasMore: false };
   document.getElementById('detailPanel').classList.add('hidden');
   renderEndpointList();
   await loadRequests(id);
@@ -248,9 +266,17 @@ async function loadRequests(endpointId) {
   const ep = endpoints[endpointId];
   if (!ep) return;
 
-  const data = await api('GET', `/api/endpoints/${endpointId}/requests`);
+  const params = new URLSearchParams({
+    limit: String(requestFilters.limit),
+    offset: String(requestFilters.offset),
+  });
+  if (requestFilters.method) params.set('method', requestFilters.method);
+  if (requestFilters.search) params.set('search', requestFilters.search);
+
+  const data = await api('GET', `/api/endpoints/${endpointId}/requests?${params.toString()}`);
   requests = {};
   for (const r of data.requests) requests[r.id] = r;
+  requestFilters.hasMore = Boolean(data.pagination?.hasMore);
 
   const webhookUrl = `${BASE}/hooks/${endpointId}`;
 
@@ -262,6 +288,19 @@ async function loadRequests(endpointId) {
       <button class="btn btn-danger btn-sm" onclick="clearRequests('${endpointId}')">Clear</button>
       <button class="btn btn-sm" onclick="deleteEndpoint('${endpointId}')" style="color:var(--text-dim);border:1px solid var(--border)">Delete</button>
     </div>
+    <div class="toolbar">
+      <input class="toolbar-input" id="requestSearch" type="search" placeholder="Search path or body" value="${escapeAttr(requestFilters.search)}">
+      <select class="toolbar-select" id="methodFilter">
+        <option value="">All methods</option>
+        <option value="GET" ${requestFilters.method === 'GET' ? 'selected' : ''}>GET</option>
+        <option value="POST" ${requestFilters.method === 'POST' ? 'selected' : ''}>POST</option>
+        <option value="PUT" ${requestFilters.method === 'PUT' ? 'selected' : ''}>PUT</option>
+        <option value="PATCH" ${requestFilters.method === 'PATCH' ? 'selected' : ''}>PATCH</option>
+        <option value="DELETE" ${requestFilters.method === 'DELETE' ? 'selected' : ''}>DELETE</option>
+      </select>
+      <button class="btn btn-sm" id="applyFiltersBtn" style="border:1px solid var(--border);background:var(--surface2);color:var(--text)">Filter</button>
+      <button class="btn btn-sm" id="resetFiltersBtn" style="border:1px solid var(--border);background:var(--surface2);color:var(--text)">Reset</button>
+    </div>
     <div class="request-list" id="requestList">
       ${data.requests.length === 0
         ? `<div class="no-requests">
@@ -269,10 +308,20 @@ async function loadRequests(endpointId) {
             <span>Send a request to</span>
             <code>${webhookUrl}</code>
            </div>`
-        : data.requests.map(r => requestItemHtml(r)).join('')
+        : `${data.requests.map(r => requestItemHtml(r)).join('')}${requestFilters.hasMore ? '<div style="padding:1rem"><button class="btn btn-full" id="loadMoreBtn" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">Load older requests</button></div>' : ''}`
       }
     </div>
   `;
+
+  document.getElementById('applyFiltersBtn').addEventListener('click', () => applyFilters());
+  document.getElementById('resetFiltersBtn').addEventListener('click', () => resetFilters());
+  document.getElementById('requestSearch').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') applyFilters();
+  });
+  const loadMoreBtn = document.getElementById('loadMoreBtn');
+  if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => loadMoreRequests(endpointId));
+  }
 }
 
 function requestItemHtml(r, isNew = false) {
@@ -280,7 +329,7 @@ function requestItemHtml(r, isNew = false) {
   return `<div class="request-item ${r.id === activeRequestId ? 'active' : ''}" id="req-${r.id}" onclick="showDetail(${r.id})">
     <div class="request-summary">
       <span class="method-badge method-${r.method}">${r.method}</span>
-      <span class="req-path">${r.path}</span>
+      <span class="req-path">${escapeHtml(r.path)}</span>
       ${isNew ? '<span class="new-badge">NEW</span>' : ''}
       <span class="req-time">${t}</span>
     </div>
@@ -290,6 +339,11 @@ function requestItemHtml(r, isNew = false) {
 function prependRequest(r) {
   const list = document.getElementById('requestList');
   if (!list) return;
+
+  if (requestFilters.method || requestFilters.search || requestFilters.offset > 0) {
+    loadRequests(activeEndpointId).catch((err) => toast(err.message));
+    return;
+  }
 
   // Remove "no requests" placeholder
   const noReqs = list.querySelector('.no-requests');
@@ -310,6 +364,42 @@ function prependRequest(r) {
     const badge = document.querySelector(`#req-${r.id} .new-badge`);
     if (badge) badge.remove();
   }, 3000);
+}
+
+function applyFilters() {
+  requestFilters.search = document.getElementById('requestSearch').value.trim();
+  requestFilters.method = document.getElementById('methodFilter').value;
+  requestFilters.offset = 0;
+  loadRequests(activeEndpointId).catch((err) => toast(err.message));
+}
+
+function resetFilters() {
+  requestFilters = { ...requestFilters, method: '', search: '', offset: 0, hasMore: false };
+  loadRequests(activeEndpointId).catch((err) => toast(err.message));
+}
+
+async function loadMoreRequests(endpointId) {
+  requestFilters.offset += requestFilters.limit;
+  const params = new URLSearchParams({
+    limit: String(requestFilters.limit),
+    offset: String(requestFilters.offset),
+  });
+  if (requestFilters.method) params.set('method', requestFilters.method);
+  if (requestFilters.search) params.set('search', requestFilters.search);
+
+  const data = await api('GET', `/api/endpoints/${endpointId}/requests?${params.toString()}`);
+  const list = document.getElementById('requestList');
+  const loadMoreWrap = document.getElementById('loadMoreBtn')?.parentElement;
+  if (loadMoreWrap) loadMoreWrap.remove();
+  list.insertAdjacentHTML('beforeend', data.requests.map(r => {
+    requests[r.id] = r;
+    return requestItemHtml(r);
+  }).join(''));
+  requestFilters.hasMore = Boolean(data.pagination?.hasMore);
+  if (requestFilters.hasMore) {
+    list.insertAdjacentHTML('beforeend', '<div style="padding:1rem"><button class="btn btn-full" id="loadMoreBtn" style="background:var(--surface2);color:var(--text);border:1px solid var(--border)">Load older requests</button></div>');
+    document.getElementById('loadMoreBtn').addEventListener('click', () => loadMoreRequests(endpointId));
+  }
 }
 
 async function clearRequests(endpointId) {
@@ -369,8 +459,8 @@ function subscribeSSE(endpointId) {
 async function showDetail(requestId) {
   // Fetch from API if not cached
   if (!requests[requestId]) {
-    const data = await api('GET', `/api/endpoints/${activeEndpointId}/requests`);
-    for (const r of data.requests) requests[r.id] = r;
+    const data = await api('GET', `/api/endpoints/${activeEndpointId}/requests/${requestId}`);
+    requests[data.request.id] = data.request;
   }
 
   const r = requests[requestId];
@@ -400,12 +490,12 @@ function renderTab(tabName, r) {
   } else if (tabName === 'headers') {
     const entries = Object.entries(r.headers || {});
     body.innerHTML = entries.length
-      ? `<table class="kv-table">${entries.map(([k,v]) => `<tr><td>${k}</td><td>${escape(v)}</td></tr>`).join('')}</table>`
+      ? `<table class="kv-table">${entries.map(([k,v]) => `<tr><td>${escape(k)}</td><td>${escape(v)}</td></tr>`).join('')}</table>`
       : '<div class="no-data">No headers</div>';
   } else if (tabName === 'query') {
     const entries = Object.entries(r.query || {});
     body.innerHTML = entries.length
-      ? `<table class="kv-table">${entries.map(([k,v]) => `<tr><td>${k}</td><td>${escape(String(v))}</td></tr>`).join('')}</table>`
+      ? `<table class="kv-table">${entries.map(([k,v]) => `<tr><td>${escape(k)}</td><td>${escape(String(v))}</td></tr>`).join('')}</table>`
       : '<div class="no-data">No query parameters</div>';
   } else if (tabName === 'raw') {
     const raw = {

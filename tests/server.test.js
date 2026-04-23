@@ -22,7 +22,20 @@ describe('GET /health', () => {
     const res = await request(app).get('/health');
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('ok');
+    expect(res.body.db).toBe('connected');
     expect(typeof res.body.activeConnections).toBe('number');
+    expect(typeof res.body.uptimeMs).toBe('number');
+  });
+
+  test('GET /metrics returns runtime counters', async () => {
+    await request(app).get('/health');
+
+    const res = await request(app).get('/metrics');
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.metrics).toBeDefined();
+    expect(typeof res.body.metrics.requests).toBe('number');
+    expect(typeof res.body.metrics.avgLatencyMs).toBe('number');
   });
 });
 
@@ -39,6 +52,16 @@ describe('Endpoint management', () => {
     expect(res.body.endpoint).toBeDefined();
     expect(res.body.url).toMatch(/^\/hooks\//);
     endpointId = res.body.endpoint.id;
+  });
+
+  test('POST /api/endpoints rejects blank labels', async () => {
+    const res = await request(app)
+      .post('/api/endpoints')
+      .send({ label: '   ' });
+
+    expect(res.status).toBe(422);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('invalid_label');
   });
 
   test('GET /api/endpoints lists endpoints', async () => {
@@ -95,6 +118,16 @@ describe('Webhook receiving', () => {
     expect(res.body.endpointId).toBe(endpointId);
   });
 
+  test('POST /hooks/:id rejects malformed JSON bodies', async () => {
+    const res = await request(app)
+      .post(`/hooks/${endpointId}`)
+      .set('Content-Type', 'application/json')
+      .send('{"broken":');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('invalid_json');
+  });
+
   test('GET /hooks/:id is also recorded', async () => {
     const res = await request(app)
       .get(`/hooks/${endpointId}?foo=bar`);
@@ -145,6 +178,7 @@ describe('Request list', () => {
     expect(res.status).toBe(200);
     expect(res.body.requests.length).toBe(3);
     expect(res.body.total).toBe(3);
+    expect(res.body.filteredTotal).toBe(3);
   });
 
   test('requests include method, path, headers, body', async () => {
@@ -163,6 +197,62 @@ describe('Request list', () => {
     const list = await request(app).get(`/api/endpoints/${endpointId}/requests`);
     expect(list.body.requests.length).toBe(0);
     expect(list.body.total).toBe(0);
+  });
+
+  test('GET /api/endpoints/:id/requests supports method and search filters', async () => {
+    const create = await request(app).post('/api/endpoints').send({ label: 'Filter test' });
+    const filteredEndpointId = create.body.endpoint.id;
+
+    await request(app).post(`/hooks/${filteredEndpointId}/orders`).send({ event: 'order.created' });
+    await request(app).post(`/hooks/${filteredEndpointId}/users`).send({ event: 'user.created' });
+    await request(app).get(`/hooks/${filteredEndpointId}/orders?status=ok`);
+
+    const res = await request(app).get(`/api/endpoints/${filteredEndpointId}/requests?method=POST&search=order`);
+    expect(res.status).toBe(200);
+    expect(res.body.filteredTotal).toBe(1);
+    expect(res.body.requests).toHaveLength(1);
+    expect(res.body.requests[0].path).toContain('/orders');
+  });
+
+  test('GET /api/endpoints/:id/requests supports pagination', async () => {
+    const create = await request(app).post('/api/endpoints').send({ label: 'Pagination test' });
+    const paginationEndpointId = create.body.endpoint.id;
+
+    for (let index = 0; index < 3; index += 1) {
+      await request(app).post(`/hooks/${paginationEndpointId}`).send({ index });
+    }
+
+    const pageOne = await request(app).get(`/api/endpoints/${paginationEndpointId}/requests?limit=2&offset=0`);
+    const pageTwo = await request(app).get(`/api/endpoints/${paginationEndpointId}/requests?limit=2&offset=2`);
+
+    expect(pageOne.status).toBe(200);
+    expect(pageOne.body.requests).toHaveLength(2);
+    expect(pageOne.body.pagination.hasMore).toBe(true);
+    expect(pageTwo.body.requests).toHaveLength(1);
+    expect(pageTwo.body.pagination.hasMore).toBe(false);
+  });
+
+  test('GET /api/endpoints/:id/requests/:requestId returns a single saved request', async () => {
+    const create = await request(app).post('/api/endpoints').send({ label: 'Detail test' });
+    const detailEndpointId = create.body.endpoint.id;
+
+    const hookResponse = await request(app)
+      .post(`/hooks/${detailEndpointId}/detail`)
+      .send({ hello: 'world' });
+
+    const res = await request(app).get(`/api/endpoints/${detailEndpointId}/requests/${hookResponse.body.requestId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.request.id).toBe(hookResponse.body.requestId);
+    expect(res.body.request.path).toContain('/detail');
+  });
+
+  test('GET /api/endpoints/:id/requests rejects invalid filters', async () => {
+    const create = await request(app).post('/api/endpoints').send({ label: 'Invalid filters' });
+    const invalidEndpointId = create.body.endpoint.id;
+
+    const res = await request(app).get(`/api/endpoints/${invalidEndpointId}/requests?limit=-1`);
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe('invalid_filters');
   });
 });
 

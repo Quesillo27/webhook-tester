@@ -1,82 +1,102 @@
 # webhook-tester
 
-![Node.js](https://img.shields.io/badge/node-20-green) ![Express](https://img.shields.io/badge/express-4.x-blue) ![SQLite](https://img.shields.io/badge/sqlite-embedded-orange) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
+![CI](https://github.com/Quesillo27/webhook-tester/actions/workflows/ci.yml/badge.svg) ![Node.js](https://img.shields.io/badge/node-20-green) ![Express](https://img.shields.io/badge/express-4.x-blue) ![SQLite](https://img.shields.io/badge/sqlite-embedded-orange) ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
-Self-hosted webhook inspector. Recibe y visualiza webhooks en tiempo real desde el navegador, con actualizaciones via SSE sin polling. Similar a webhook.site pero en tu propio servidor.
+Inspector de webhooks self-hosted con UI en tiempo real. Permite crear endpoints efimeros, capturar cualquier metodo HTTP, inspeccionar payloads desde el navegador y filtrar el historial sin depender de servicios externos.
 
 ## Instalacion en 3 comandos
 
 ```bash
 git clone https://github.com/Quesillo27/webhook-tester
 cd webhook-tester
-npm install
+./setup.sh
 ```
 
-## Uso
+## Uso rapido
 
 ```bash
-npm start   # inicia el servicio en puerto 4000
+npm start
 ```
 
-Abre `http://localhost:4000` en tu navegador, crea un endpoint y copia la URL generada.
+Abre `http://localhost:4000`, crea un endpoint y usa la URL generada para enviar requests de prueba.
 
-## Ejemplo
+## Ejemplos reales
 
 ```bash
-# 1. Crear un endpoint via API
+# 1. Crear endpoint
 curl -X POST http://localhost:4000/api/endpoints \
   -H "Content-Type: application/json" \
-  -d '{"label": "Mi webhook de prueba"}'
-# → {"endpoint":{"id":"abc123XYZ0","label":"Mi webhook..."},"url":"/hooks/abc123XYZ0"}
+  -d '{"label":"Stripe Sandbox"}'
 
-# 2. Enviar un webhook a ese endpoint (cualquier metodo funciona)
-curl -X POST http://localhost:4000/hooks/abc123XYZ0 \
+# 2. Enviar webhook JSON
+curl -X POST http://localhost:4000/hooks/abc123XYZ0/orders \
   -H "Content-Type: application/json" \
-  -d '{"event":"user.created","userId":42}'
-# → {"received":true,"requestId":1,"endpointId":"abc123XYZ0","timestamp":1712345678000}
+  -d '{"event":"order.created","amount":1499}'
 
-# 3. Ver todos los requests recibidos
-curl http://localhost:4000/api/endpoints/abc123XYZ0/requests
-# → {"requests":[{"id":1,"method":"POST","path":"/hooks/abc123XYZ0","body":"{\"event\":\"user.created\"...}"}],"total":1}
+# 3. Buscar solo POST que contengan "order"
+curl "http://localhost:4000/api/endpoints/abc123XYZ0/requests?method=POST&search=order&limit=20"
+
+# 4. Ver metricas del proceso
+curl http://localhost:4000/metrics
 ```
 
 ## API
 
 | Metodo | Endpoint | Descripcion |
 |--------|----------|-------------|
-| GET | `/health` | Estado del servicio y conexiones activas |
-| POST | `/api/endpoints` | Crear nuevo endpoint webhook |
-| GET | `/api/endpoints` | Listar todos los endpoints |
-| GET | `/api/endpoints/:id` | Obtener info de un endpoint |
-| DELETE | `/api/endpoints/:id` | Eliminar endpoint y sus requests |
-| GET | `/api/endpoints/:id/requests` | Listar requests recibidos |
-| DELETE | `/api/endpoints/:id/requests` | Borrar todos los requests |
-| GET | `/api/endpoints/:id/stream` | SSE stream (tiempo real) |
-| ANY | `/hooks/:id/*` | Recibir webhook (cualquier metodo) |
-
-## Caracteristicas
-
-- **Tiempo real** via SSE (Server-Sent Events) — sin polling, sin WebSockets
-- **Historial persistente** — SQLite embebido, los requests se guardan entre reinicios
-- **Multi-endpoint** — crea tantos endpoints como necesites
-- **Inspector completo** — ve headers, query params, body y raw JSON
-- **Todos los metodos** — POST, GET, PUT, PATCH, DELETE y cualquier otro
-- **Dark UI** — interfaz moderna con resaltado de metodos HTTP
+| GET | `/health` | Estado del servicio, uptime, DB y conexiones activas |
+| GET | `/metrics` | Conteo total de requests, errores y latencia promedio |
+| POST | `/api/endpoints` | Crear un endpoint webhook |
+| GET | `/api/endpoints` | Listar endpoints creados |
+| GET | `/api/endpoints/:id` | Obtener un endpoint |
+| DELETE | `/api/endpoints/:id` | Eliminar endpoint y requests asociados |
+| GET | `/api/endpoints/:id/requests` | Listar requests con `limit`, `offset`, `method`, `search` |
+| GET | `/api/endpoints/:id/requests/:requestId` | Obtener un request puntual |
+| DELETE | `/api/endpoints/:id/requests` | Borrar historial del endpoint |
+| GET | `/api/endpoints/:id/stream` | Stream SSE en tiempo real |
+| ANY | `/hooks/:id/*` | Capturar webhook y almacenarlo |
 
 ## Variables de entorno
 
-| Variable | Default | Descripcion |
-|----------|---------|-------------|
-| PORT | 4000 | Puerto del servidor |
-| DB_PATH | ./webhooks.db | Ruta del archivo SQLite |
+| Variable | Descripcion | Default | Obligatoria |
+|----------|-------------|---------|-------------|
+| `PORT` | Puerto HTTP del servidor | `4000` | No |
+| `DB_PATH` | Ruta del archivo SQLite | `./webhooks.db` | No |
+| `LOG_LEVEL` | Nivel del logger `pino` | `info` | No |
+| `MAX_BODY_SIZE` | Limite del body aceptado por Express | `1mb` | No |
+| `DEFAULT_REQUEST_PAGE_SIZE` | Tamano por defecto de cada pagina | `50` | No |
+| `MAX_REQUEST_PAGE_SIZE` | Limite maximo de pagina | `200` | No |
+| `MAX_ENDPOINT_LABEL_LENGTH` | Longitud maxima permitida para labels | `80` | No |
+| `MAX_SEARCH_LENGTH` | Longitud maxima del filtro `search` | `120` | No |
+| `RATE_LIMIT_WINDOW_MS` | Ventana del rate limit | `60000` | No |
+| `RATE_LIMIT_MAX_REQUESTS` | Maximo de requests por ventana | `300` | No |
+
+## Seguridad y observabilidad
+
+- `helmet` para headers de seguridad.
+- Rate limiting global con `express-rate-limit`.
+- Respuestas JSON consistentes con `success`, `message` y `data`.
+- Logger estructurado con timestamps ISO.
+- `/metrics` y `/health` exponen estado util para monitoreo.
+- La UI escapa labels, paths, headers y query params para evitar XSS.
 
 ## Docker
 
 ```bash
 docker build -t webhook-tester .
-docker run -p 4000:4000 -v ./data:/data webhook-tester
+docker run --rm -p 4000:4000 -v "$(pwd)/data:/data" webhook-tester
 ```
 
-## Contribuir
+## Desarrollo
 
-PRs bienvenidos. Corre `npm test` antes de enviar.
+```bash
+make dev
+make test
+make docker
+```
+
+## Roadmap
+
+- Exportacion de requests a JSON o cURL desde la UI.
+- Persistencia y replay programado de webhooks capturados.
+- Autenticacion opcional para despliegues multiusuario.
