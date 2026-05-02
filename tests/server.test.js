@@ -128,6 +128,16 @@ describe('Webhook receiving', () => {
     expect(res.body.error).toBe('invalid_json');
   });
 
+  test('POST /hooks/:id rejects bodies larger than MAX_BODY_SIZE', async () => {
+    const res = await request(app)
+      .post(`/hooks/${endpointId}`)
+      .send({ payload: 'x'.repeat((1024 * 1024) + 64) });
+
+    expect(res.status).toBe(413);
+    expect(res.body.success).toBe(false);
+    expect(res.body.error).toBe('payload_too_large');
+  });
+
   test('GET /hooks/:id is also recorded', async () => {
     const res = await request(app)
       .get(`/hooks/${endpointId}?foo=bar`);

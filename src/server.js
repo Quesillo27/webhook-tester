@@ -49,6 +49,14 @@ app.use((req, res, next) => {
 app.use(express.static(path.join(__dirname, '..', 'public')));
 
 app.use((err, req, res, next) => {
+  if (err && err.type === 'entity.too.large') {
+    return sendError(res, {
+      status: 413,
+      error: 'payload_too_large',
+      message: `Request body exceeds MAX_BODY_SIZE (${config.maxBodySize})`,
+    });
+  }
+
   if (err instanceof SyntaxError && err.status === 400 && 'body' in err) {
     return sendError(res, {
       status: 400,

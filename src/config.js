@@ -3,7 +3,7 @@
 const path = require('path');
 
 module.exports = {
-  appVersion: '1.1.0',
+  appVersion: '1.1.1',
   port: Number(process.env.PORT || 4000),
   dbPath: process.env.DB_PATH || path.join(__dirname, '..', 'webhooks.db'),
   maxBodySize: process.env.MAX_BODY_SIZE || '1mb',

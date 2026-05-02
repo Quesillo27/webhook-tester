@@ -1,6 +1,6 @@
 {
   "name": "webhook-tester",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "App to receive and visualize webhooks in real-time via browser — like webhook.site but self-hosted",
   "main": "src/server.js",
   "scripts": {

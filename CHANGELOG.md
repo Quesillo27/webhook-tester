@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-05-02
+
+### Fixed
+- Oversized request bodies now return a consistent `413 payload_too_large` response instead of falling through to the generic error handler.
+
 ## [1.1.0] - 2026-04-23
 
 ### Added

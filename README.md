@@ -78,6 +78,7 @@ curl http://localhost:4000/metrics
 - Respuestas JSON consistentes con `success`, `message` y `data`.
 - Logger estructurado con timestamps ISO.
 - `/metrics` y `/health` exponen estado util para monitoreo.
+- Bodies que exceden `MAX_BODY_SIZE` responden `413 payload_too_large` en vez de un error generico.
 - La UI escapa labels, paths, headers y query params para evitar XSS.
 
 ## Docker
